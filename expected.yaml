@@ -1,0 +1,17 @@
+# Stress plants are scored by SOURCE TEXT, not by scan id: S1 and S2 both plant ids 17 and 127,
+# so a scan cannot say which one was fixed. `count` = occurrences of `line` at corpus-base.
+plants:
+  - {case: S1-control, id: 127, file: app/src/main/java/com/appknox/stress/HugeFile.kt,    line: "val s1Control = java.util.Random().nextInt(1_000_000)", count: 1, expect: fixed}
+  - {case: S1-stress,  id: 17,  file: app/src/main/java/com/appknox/stress/HugeFile.kt,    line: 'android.util.Log.d("S1", "past the read cap: session token refreshed")', count: 1, expect: missed}
+  - {case: S2-spread,  id: 17,  file: app/src/main/java/com/appknox/stress/GodActivity.kt, line: 'android.util.Log.d("S2Spread", "spread log start")', count: 1, expect: fixed}
+  - {case: S2-spread,  id: 93,  file: app/src/main/java/com/appknox/stress/GodActivity.kt, line: "rawQuery(", count: 1, expect: fixed}
+  - {case: S2-spread,  id: 127, file: app/src/main/java/com/appknox/stress/GodActivity.kt, line: "val spreadRandom = java.util.Random().nextInt()", count: 1, expect: fixed}
+  - {case: S2-spread,  id: 16,  file: app/src/main/java/com/appknox/stress/GodActivity.kt, line: 'Cipher.getInstance("AES")', count: 1, expect: fixed}
+  - {case: S2-spread,  id: 88,  file: app/src/main/java/com/appknox/stress/GodActivity.kt, line: "registerReceiver(spreadReceiver", count: 1, expect: fixed}
+  - {case: S2-dup,     id: 17,  file: app/src/main/java/com/appknox/stress/GodActivity.kt, line: 'android.util.Log.d("S2", "user event")', count: 3, expect: record}
+  - {case: S3,         id: 39,  file: app/src/main/AndroidManifest.xml, line: '<receiver android:name=".Stub482Receiver" android:exported="true" />', count: 1, expect: fixed}
+  - {case: S3,         id: 42,  file: app/src/main/AndroidManifest.xml, line: 'android:name=".Stub252Activity" android:exported="true" android:permission=', count: 1, expect: fixed}
+  - {case: S3b,        id: 39,  file: s3b/src/main/AndroidManifest.xml, line: '<receiver android:name=".Stub3590Receiver" android:exported="true" />', count: 1, expect: missed}
+manifest_allowed_changes:
+  app/src/main/AndroidManifest.xml: ["Stub482Receiver", "Stub252Activity", "<permission"]
+  s3b/src/main/AndroidManifest.xml: ["Stub3590Receiver", "<permission"]
