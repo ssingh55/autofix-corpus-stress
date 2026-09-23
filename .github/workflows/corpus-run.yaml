@@ -7,7 +7,7 @@ on:
         description: "Tag or branch holding the untouched corpus"
         default: "corpus-base"
       fixerRef:
-        description: "appknox-go ref (branch, tag or SHA) to build the fixer from; its SHA is recorded in the scorecard"
+        description: "appknox-go ref (branch, tag or FULL 40-char SHA) to build the fixer from; its SHA is recorded in the scorecard"
         default: "feat/autofix-cli-gate"
 env:
   APPKNOX_API_HOST: https://autofix.staging.appknox.io/
@@ -38,12 +38,17 @@ jobs:
       # Checked out under runner.temp, NOT under GITHUB_WORKSPACE: `appknox
       # autofix` locates/patches files inside the workspace, and must never
       # see appknox-go's own Go sources as something to patch.
-      - uses: actions/checkout@v4
-        with:
-          repository: appknox/appknox-go
-          ref: ${{ inputs.fixerRef }}
-          path: ${{ runner.temp }}/appknox-go
-          persist-credentials: false
+      # actions/checkout refuses paths outside GITHUB_WORKSPACE, and appknox-go must
+      # stay outside it (autofix patches files inside the workspace). appknox-go is
+      # public, so an anonymous fetch works; fetching by ref also accepts a commit SHA.
+      - name: Fetch appknox-go outside the workspace
+        env:
+          FIXER_REF: ${{ inputs.fixerRef }}
+        run: |
+          set -euo pipefail
+          git init -q "$RUNNER_TEMP/appknox-go"
+          git -C "$RUNNER_TEMP/appknox-go" fetch -q --depth 1 https://github.com/appknox/appknox-go.git "$FIXER_REF"
+          git -C "$RUNNER_TEMP/appknox-go" checkout -q FETCH_HEAD
       - name: Build tools and snapshot the scorer
         run: |
           set -euo pipefail
