@@ -1,0 +1,125 @@
+# Dispatch ONLY: every run spends model budget. Never add push/pull_request.
+name: Corpus Run
+on:
+  workflow_dispatch:
+    inputs:
+      baseRef:
+        description: "Tag or branch holding the untouched corpus"
+        default: "corpus-base"
+env:
+  APPKNOX_API_HOST: https://autofix.staging.appknox.io/
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_AUTOFIX_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      BASE_REF: ${{ inputs.baseRef }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.baseRef }}
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.24" }
+      # Checked out under runner.temp, NOT under GITHUB_WORKSPACE: `appknox
+      # autofix` locates/patches files inside the workspace, and must never
+      # see appknox-go's own Go sources as something to patch.
+      - uses: actions/checkout@v4
+        with:
+          repository: appknox/appknox-go
+          ref: feat/autofix-cli-gate
+          path: ${{ runner.temp }}/appknox-go
+      - name: Build tools
+        run: |
+          # $RUNNER_TEMP is a default runner env var (equal to runner.temp),
+          # already exported by the runner into every step - no expression
+          # interpolation needed here.
+          (cd "$RUNNER_TEMP/appknox-go" && go build -o "$RUNNER_TEMP/bin/appknox" .)
+          pip install -r tools/requirements.txt
+          # Our own scorer at a pinned tag, for the id-level regression line.
+          curl -sfL "https://raw.githubusercontent.com/ssingh55/autofix-corpus-android/corpus-base/tools/score.py" -o tools/score_ids.py
+      - name: Create the run branch from the base
+        run: |
+          run_branch="corpus-run/${GITHUB_RUN_ID}"
+          git push origin "HEAD:refs/heads/${run_branch}"
+          echo "RUN_BRANCH=${run_branch}" >> "$GITHUB_ENV"
+          echo "HEAD_REF=autofix-${GITHUB_RUN_ID}" >> "$GITHUB_ENV"
+      - name: Build baseline APKs
+        run: ./gradlew --no-daemon :app:assembleRelease :s3b:assembleRelease
+      - name: Upload, wait, sanity gate
+        run: |
+          set -euo pipefail
+          for apk in app s3b; do
+            id=$("$RUNNER_TEMP/bin/appknox" upload "${apk}/build/outputs/apk/release/${apk}-release.apk" --knoxiq)
+            [[ "$id" =~ ^[0-9]+$ ]] || { echo "::error::bad file id '$id'"; exit 1; }
+            echo "BEFORE_${apk}=${id}" >> "$GITHUB_ENV"
+            tools/wait_scan.sh "$id"
+            curl -sf --retry 5 -H "Authorization: Token $APPKNOX_ACCESS_TOKEN" \
+              "${APPKNOX_API_HOST}api/v2/files/${id}/analyses?limit=200" > "before-${apk}.json"
+            python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); c=d.get("count",0); r=d.get("results",[]); c>len(r) and (print(f"::error::{sys.argv[1]}: count={c} exceeds len(results)={len(r)} (pagination would silently drop findings)") or sys.exit(1))' "before-${apk}.json"
+          done
+          # The stress plants are only meaningful if the scanner reports them at all.
+          python3 -c 'import json,sys; sys.path.insert(0,"tools"); from score_ids import risky; app=risky(json.load(open("before-app.json"))); s3b=risky(json.load(open("before-s3b.json"))); missing=sorted({17,39,42,127}-set(app))+([39] if 39 not in s3b else []); missing and (print(f"::error::stress plants not detected: {missing}") or sys.exit(1))'
+      - name: Autofix both APKs onto one PR
+        run: |
+          set -euo pipefail
+          for apk in app s3b; do
+            var="BEFORE_${apk}"
+            "$RUNNER_TEMP/bin/appknox" autofix --file-id "${!var}" --ref "$RUN_BRANCH" --head-ref "$HEAD_REF"
+          done
+      - name: Build the PR head and rescan
+        run: |
+          set -euo pipefail
+          # Same derivation found in repo A Task 8 Step 1: appknox-go's
+          # helper/delivery.go builds the pushed branch as
+          # prBranch(headRef) = capGitRef(autofixBranchPrefix + sanitizeFeature(headRef), headRef),
+          # where autofixBranchPrefix = "appknox-autofix/". HEAD_REF here
+          # ("autofix-<run id>") contains only [A-Za-z0-9-], so
+          # sanitizeFeature is a no-op and the branch is well under the
+          # 244-byte cap, so capGitRef never truncates it. Derived
+          # statically rather than parsed from `autofix` output.
+          FIX_BRANCH="appknox-autofix/${HEAD_REF}"
+          git ls-remote --exit-code origin "refs/heads/$FIX_BRANCH" >/dev/null || {
+            echo "::error::autofix produced no fix branch (nothing to fix?)"; exit 1; }
+          git fetch origin "$FIX_BRANCH"
+          git checkout FETCH_HEAD
+          echo "FIX_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          git diff "origin/$RUN_BRANCH" --stat
+          ./gradlew --no-daemon :app:assembleRelease :s3b:assembleRelease
+          for apk in app s3b; do
+            id=$("$RUNNER_TEMP/bin/appknox" upload "${apk}/build/outputs/apk/release/${apk}-release.apk" --knoxiq)
+            [[ "$id" =~ ^[0-9]+$ ]] || { echo "::error::bad file id '$id'"; exit 1; }
+            tools/wait_scan.sh "$id"
+            curl -sf --retry 5 -H "Authorization: Token $APPKNOX_ACCESS_TOKEN" \
+              "${APPKNOX_API_HOST}api/v2/files/${id}/analyses?limit=200" > "after-${apk}.json"
+            python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); c=d.get("count",0); r=d.get("results",[]); c>len(r) and (print(f"::error::{sys.argv[1]}: count={c} exceeds len(results)={len(r)} (pagination would silently drop findings)") or sys.exit(1))' "after-${apk}.json"
+          done
+      - name: Score
+        if: always()
+        run: |
+          set -euo pipefail
+          [ -n "${FIX_SHA:-}" ] || { echo "no fix branch was built; nothing to score"; exit 0; }
+          python tools/score_plants.py --expected expected.yaml --base "origin/$RUN_BRANCH" --head "$FIX_SHA" \
+            --summary scorecard.md --json scorecard.json
+          cat scorecard.md >> "$GITHUB_STEP_SUMMARY"
+          for apk in app s3b; do
+            [ -f "before-${apk}.json" ] && [ -f "after-${apk}.json" ] || continue
+            python3 -c 'import json,sys; sys.path.insert(0,"tools"); from score_ids import risky; b=risky(json.load(open(sys.argv[1]))); a=risky(json.load(open(sys.argv[2]))); print(f"\n{sys.argv[3]}: regressions (new ids): {sorted(set(a)-set(b))}")' "before-${apk}.json" "after-${apk}.json" "$apk" >> "$GITHUB_STEP_SUMMARY"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: corpus-run
+          path: |
+            before-*.json
+            after-*.json
+            scorecard.*
