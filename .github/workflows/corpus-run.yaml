@@ -6,20 +6,25 @@ on:
       baseRef:
         description: "Tag or branch holding the untouched corpus"
         default: "corpus-base"
+      fixerRef:
+        description: "appknox-go ref (branch, tag or SHA) to build the fixer from; its SHA is recorded in the scorecard"
+        default: "feat/autofix-cli-gate"
 env:
   APPKNOX_API_HOST: https://autofix.staging.appknox.io/
 permissions:
   contents: write
   pull-requests: write
+# Secrets are NOT set job-wide: APPKNOX_ACCESS_TOKEN and GITHUB_TOKEN are given only to the
+# steps that call Appknox or push, never to a Gradle build of LLM-authored code.
 jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 240
     env:
-      APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_AUTOFIX_TOKEN }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       BASE_REF: ${{ inputs.baseRef }}
     steps:
+      # persist-credentials stays on for this checkout only because "Create the run branch"
+      # pushes with it; that step drops the stored credential right after the push.
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.baseRef }}
@@ -36,47 +41,99 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: appknox/appknox-go
-          ref: feat/autofix-cli-gate
+          ref: ${{ inputs.fixerRef }}
           path: ${{ runner.temp }}/appknox-go
-      - name: Build tools
+          persist-credentials: false
+      - name: Build tools and snapshot the scorer
         run: |
+          set -euo pipefail
           # $RUNNER_TEMP is a default runner env var (equal to runner.temp),
           # already exported by the runner into every step - no expression
           # interpolation needed here.
           (cd "$RUNNER_TEMP/appknox-go" && go build -o "$RUNNER_TEMP/bin/appknox" .)
-          pip install -r tools/requirements.txt
-          # Our own scorer at a pinned tag, for the id-level regression line.
-          curl -sfL "https://raw.githubusercontent.com/ssingh55/autofix-corpus-android/corpus-base/tools/score.py" -o tools/score_ids.py
+          # Scorer, helper scripts and expected.yaml are copied out of the workspace
+          # BEFORE any fix branch is checked out: the fix branch is LLM-authored, and
+          # .py is a source suffix the fixer may edit. Everything below runs these copies.
+          # The id-level helper (risky) is vendored in tools/score_plants.py: no code is
+          # fetched from another repo.
+          mkdir -p "$RUNNER_TEMP/corpus" "$RUNNER_TEMP/out"
+          cp -R tools expected.yaml "$RUNNER_TEMP/corpus/"
+          pip install -r "$RUNNER_TEMP/corpus/tools/requirements.txt"
+          echo "FIXER_SHA=$(git -C "$RUNNER_TEMP/appknox-go" rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "CORPUS_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
       - name: Create the run branch from the base
         run: |
+          set -euo pipefail
           run_branch="corpus-run/${GITHUB_RUN_ID}"
           git push origin "HEAD:refs/heads/${run_branch}"
+          # Drop the checkout's stored push credential: nothing after this pushes with it
+          # (autofix pushes through the API with the step-scoped GITHUB_TOKEN), and later
+          # steps build LLM-authored code. The repo is public, so fetches need no auth.
+          # (get-regexp exits 1 when nothing matches; that is fine, hence the || true.)
+          { git config --local --name-only --get-regexp '^http\..*\.extraheader$' || true; } | while read -r key; do
+            git config --local --unset-all "$key"
+          done
           echo "RUN_BRANCH=${run_branch}" >> "$GITHUB_ENV"
           echo "HEAD_REF=autofix-${GITHUB_RUN_ID}" >> "$GITHUB_ENV"
       - name: Build baseline APKs
         run: ./gradlew --no-daemon :app:assembleRelease :s3b:assembleRelease
-      - name: Upload, wait, sanity gate
+      - name: Upload, wait for scan and KnoxIQ, sanity gate
+        env:
+          APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_AUTOFIX_TOKEN }}
         run: |
           set -euo pipefail
+          T="$RUNNER_TEMP/corpus"; OUT="$RUNNER_TEMP/out"; BIN="$RUNNER_TEMP/bin/appknox"
           for apk in app s3b; do
-            id=$("$RUNNER_TEMP/bin/appknox" upload "${apk}/build/outputs/apk/release/${apk}-release.apk" --knoxiq)
+            id=$("$BIN" upload "${apk}/build/outputs/apk/release/${apk}-release.apk" --knoxiq)
             [[ "$id" =~ ^[0-9]+$ ]] || { echo "::error::bad file id '$id'"; exit 1; }
             echo "BEFORE_${apk}=${id}" >> "$GITHUB_ENV"
-            tools/wait_scan.sh "$id"
+            "$T/tools/wait_scan.sh" "$id"
+            # autofix refuses to start until KnoxIQ is COMPLETED (one check, no wait), and
+            # triage can rewrite risks, so wait for it before snapshotting.
+            "$T/tools/wait_knoxiq.sh" "$BIN" "$id"
             curl -sf --retry 5 -H "Authorization: Token $APPKNOX_ACCESS_TOKEN" \
-              "${APPKNOX_API_HOST}api/v2/files/${id}/analyses?limit=200" > "before-${apk}.json"
-            python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); c=d.get("count",0); r=d.get("results",[]); c>len(r) and (print(f"::error::{sys.argv[1]}: count={c} exceeds len(results)={len(r)} (pagination would silently drop findings)") or sys.exit(1))' "before-${apk}.json"
+              "${APPKNOX_API_HOST}api/v2/files/${id}/analyses?limit=200" > "$OUT/before-${apk}.json"
+            python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); c=d.get("count",0); r=d.get("results",[]); c>len(r) and (print(f"::error::{sys.argv[1]}: count={c} exceeds len(results)={len(r)} (pagination would silently drop findings)") or sys.exit(1))' "$OUT/before-${apk}.json"
           done
-          # The stress plants are only meaningful if the scanner reports them at all.
-          python3 -c 'import json,sys; sys.path.insert(0,"tools"); from score_ids import risky; app=risky(json.load(open("before-app.json"))); s3b=risky(json.load(open("before-s3b.json"))); missing=sorted({17,39,42,127}-set(app))+([39] if 39 not in s3b else []); missing and (print(f"::error::stress plants not detected: {missing}") or sys.exit(1))'
+          # The stress plants are only meaningful if the scanner reports them at all:
+          # EVERY id in expected.yaml plants must be in the baseline scan of its APK.
+          python "$T/tools/score_plants.py" gate --expected "$T/expected.yaml" \
+            --before "app=$OUT/before-app.json" --before "s3b=$OUT/before-s3b.json"
       - name: Autofix both APKs onto one PR
+        env:
+          APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_AUTOFIX_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          OUT="$RUNNER_TEMP/out"; BIN="$RUNNER_TEMP/bin/appknox"
+          FIX_BRANCH="appknox-autofix/${HEAD_REF}"
+          for apk in app s3b; do
+            # autofix pushes WHOLE-FILE contents onto the branch tip, so a run that computed
+            # its patch from corpus-base would overwrite an earlier run's edit to any file both
+            # runs touch. The two modules share no files today; patch on top anyway.
+            if git ls-remote --exit-code origin "refs/heads/$FIX_BRANCH" >/dev/null; then
+              git fetch origin "$FIX_BRANCH"
+              git checkout -q FETCH_HEAD
+            fi
+            var="BEFORE_${apk}"
+            # Logs go to runner.temp, never the workspace, so the locate agent cannot read them.
+            "$BIN" autofix --file-id "${!var}" --ref "$RUN_BRANCH" --head-ref "$HEAD_REF" 2>&1 | tee "$OUT/autofix-${apk}.log"
+          done
+      - name: Re-fetch the baseline analyses after triage
+        env:
+          APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_AUTOFIX_TOKEN }}
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/out"
+          # autofix only ran once KnoxIQ was COMPLETED, so these are the triaged baselines the
+          # after-scans (also taken post-triage) are compared against.
           for apk in app s3b; do
             var="BEFORE_${apk}"
-            "$RUNNER_TEMP/bin/appknox" autofix --file-id "${!var}" --ref "$RUN_BRANCH" --head-ref "$HEAD_REF"
+            curl -sf --retry 5 -H "Authorization: Token $APPKNOX_ACCESS_TOKEN" \
+              "${APPKNOX_API_HOST}api/v2/files/${!var}/analyses?limit=200" > "$OUT/before-${apk}.json"
+            python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); c=d.get("count",0); r=d.get("results",[]); c>len(r) and (print(f"::error::{sys.argv[1]}: count={c} exceeds len(results)={len(r)} (pagination would silently drop findings)") or sys.exit(1))' "$OUT/before-${apk}.json"
           done
-      - name: Build the PR head and rescan
+      - name: Build the PR head (no secrets in this step)
         run: |
           set -euo pipefail
           # Same derivation found in repo A Task 8 Step 1: appknox-go's
@@ -91,35 +148,60 @@ jobs:
           git ls-remote --exit-code origin "refs/heads/$FIX_BRANCH" >/dev/null || {
             echo "::error::autofix produced no fix branch (nothing to fix?)"; exit 1; }
           git fetch origin "$FIX_BRANCH"
-          git checkout FETCH_HEAD
+          git checkout -q FETCH_HEAD
           echo "FIX_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           git diff "origin/$RUN_BRANCH" --stat
           ./gradlew --no-daemon :app:assembleRelease :s3b:assembleRelease
+      - name: Rescan the PR head
+        env:
+          APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_AUTOFIX_TOKEN }}
+        run: |
+          set -euo pipefail
+          T="$RUNNER_TEMP/corpus"; OUT="$RUNNER_TEMP/out"; BIN="$RUNNER_TEMP/bin/appknox"
           for apk in app s3b; do
-            id=$("$RUNNER_TEMP/bin/appknox" upload "${apk}/build/outputs/apk/release/${apk}-release.apk" --knoxiq)
+            id=$("$BIN" upload "${apk}/build/outputs/apk/release/${apk}-release.apk" --knoxiq)
             [[ "$id" =~ ^[0-9]+$ ]] || { echo "::error::bad file id '$id'"; exit 1; }
-            tools/wait_scan.sh "$id"
+            echo "AFTER_${apk}=${id}" >> "$GITHUB_ENV"
+            "$T/tools/wait_scan.sh" "$id"
+            # Same post-triage point as the re-fetched baseline, so KnoxIQ timing cannot
+            # make an id appear in one snapshot and not the other.
+            "$T/tools/wait_knoxiq.sh" "$BIN" "$id"
             curl -sf --retry 5 -H "Authorization: Token $APPKNOX_ACCESS_TOKEN" \
-              "${APPKNOX_API_HOST}api/v2/files/${id}/analyses?limit=200" > "after-${apk}.json"
-            python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); c=d.get("count",0); r=d.get("results",[]); c>len(r) and (print(f"::error::{sys.argv[1]}: count={c} exceeds len(results)={len(r)} (pagination would silently drop findings)") or sys.exit(1))' "after-${apk}.json"
+              "${APPKNOX_API_HOST}api/v2/files/${id}/analyses?limit=200" > "$OUT/after-${apk}.json"
+            python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); c=d.get("count",0); r=d.get("results",[]); c>len(r) and (print(f"::error::{sys.argv[1]}: count={c} exceeds len(results)={len(r)} (pagination would silently drop findings)") or sys.exit(1))' "$OUT/after-${apk}.json"
           done
       - name: Score
         if: always()
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          T="$RUNNER_TEMP/corpus"; OUT="$RUNNER_TEMP/out"
           [ -n "${FIX_SHA:-}" ] || { echo "no fix branch was built; nothing to score"; exit 0; }
-          python tools/score_plants.py --expected expected.yaml --base "origin/$RUN_BRANCH" --head "$FIX_SHA" \
-            --summary scorecard.md --json scorecard.json
-          cat scorecard.md >> "$GITHUB_STEP_SUMMARY"
+          # PARTIAL: the fixer stops at the gateway budget ("...the remaining N were not
+          # attempted") and still exits 0. Its log names skipped findings only by their text,
+          # not by id, so plants cannot be marked not-attempted; the scorecard is stamped.
+          partial=""; skipped=""
           for apk in app s3b; do
-            [ -f "before-${apk}.json" ] && [ -f "after-${apk}.json" ] || continue
-            python3 -c 'import json,sys; sys.path.insert(0,"tools"); from score_ids import risky; b=risky(json.load(open(sys.argv[1]))); a=risky(json.load(open(sys.argv[2]))); print(f"\n{sys.argv[3]}: regressions (new ids): {sorted(set(a)-set(b))}")' "before-${apk}.json" "after-${apk}.json" "$apk" >> "$GITHUB_STEP_SUMMARY"
+            log="$OUT/autofix-${apk}.log"
+            [ -f "$log" ] || continue
+            grep -q 'were not attempted' "$log" && partial="${partial:+$partial, }${apk} run truncated at the budget (autofix-${apk}.log)"
+            skipped="${skipped:+$skipped, }${apk} $(grep -c '^autofix: skipping' "$log")"
           done
+          scans=()
+          for apk in app s3b; do
+            [ -f "$OUT/before-${apk}.json" ] && scans+=(--before "${apk}=$OUT/before-${apk}.json")
+            [ -f "$OUT/after-${apk}.json" ] && scans+=(--after "${apk}=$OUT/after-${apk}.json")
+          done
+          python "$T/tools/score_plants.py" score --expected "$T/expected.yaml" \
+            --base "origin/$RUN_BRANCH" --head "$FIX_SHA" \
+            --summary "$OUT/scorecard.md" --json "$OUT/scorecard.json" \
+            "${scans[@]}" --partial "$partial" \
+            --meta "appknox-go=${FIXER_SHA:-?}" --meta "corpus base=${CORPUS_SHA:-?}" \
+            --meta "fix branch head=${FIX_SHA}" \
+            --meta "file ids=before app ${BEFORE_app:-?} s3b ${BEFORE_s3b:-?}, after app ${AFTER_app:-?} s3b ${AFTER_s3b:-?}" \
+            --meta "findings skipped by autofix=${skipped:-none}" || exit 1
+          cat "$OUT/scorecard.md" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: corpus-run
-          path: |
-            before-*.json
-            after-*.json
-            scorecard.*
+          path: ${{ runner.temp }}/out/
