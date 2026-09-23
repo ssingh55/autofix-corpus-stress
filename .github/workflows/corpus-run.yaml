@@ -56,6 +56,11 @@ jobs:
           # already exported by the runner into every step - no expression
           # interpolation needed here.
           (cd "$RUNNER_TEMP/appknox-go" && go build -o "$RUNNER_TEMP/bin/appknox" .)
+          # appknox-go (4f69cc6) creates ~/.config/appknox.json EMPTY on first run, then
+          # every later call fails to parse it and prints a warning on STDOUT, which
+          # corrupts `upload`'s file-id output. Seed a valid empty JSON config first.
+          mkdir -p "$HOME/.config"
+          [ -s "$HOME/.config/appknox.json" ] || echo '{}' > "$HOME/.config/appknox.json"
           # Scorer, helper scripts and expected.yaml are copied out of the workspace
           # BEFORE any fix branch is checked out: the fix branch is LLM-authored, and
           # .py is a source suffix the fixer may edit. Everything below runs these copies.
