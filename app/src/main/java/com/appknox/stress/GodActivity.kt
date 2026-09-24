@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import androidx.core.content.ContextCompat
 
 class GodActivity : Activity() {
     private val spreadReceiver = object : BroadcastReceiver() {
@@ -131,8 +132,7 @@ class GodActivity : Activity() {
         return name.length + 366
     }
     fun handler40(name: String): Int {
-        android.util.Log.d("S2Spread", "spread log start")
-        android.database.sqlite.SQLiteDatabase.create(null).rawQuery("SELECT * FROM t WHERE n = '" + name + "'", null)
+        android.database.sqlite.SQLiteDatabase.create(null).rawQuery("SELECT * FROM t WHERE n = ?", arrayOf(name))
         return name.length + 638
     }
     fun handler41(name: String): Int {
@@ -613,7 +613,6 @@ class GodActivity : Activity() {
         return name.length + 216
     }
     fun handler200(name: String): Int {
-        android.util.Log.d("S2", "user event")
         return name.length + 781
     }
     fun handler201(name: String): Int {
@@ -2414,7 +2413,6 @@ class GodActivity : Activity() {
         return name.length + 598
     }
     fun handler800(name: String): Int {
-        android.util.Log.d("S2", "user event")
         return name.length + 806
     }
     fun handler801(name: String): Int {
@@ -3015,8 +3013,8 @@ class GodActivity : Activity() {
         return name.length + 287
     }
     fun handler1000(name: String): Int {
-        val spreadRandom = java.util.Random().nextInt()
-        val spreadCipher = javax.crypto.Cipher.getInstance("AES")
+        val spreadRandom = java.security.SecureRandom().nextInt()
+        val spreadCipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
         return name.length + 603
     }
     fun handler1001(name: String): Int {
@@ -4217,7 +4215,6 @@ class GodActivity : Activity() {
         return name.length + 201
     }
     fun handler1400(name: String): Int {
-        android.util.Log.d("S2", "user event")
         return name.length + 178
     }
     fun handler1401(name: String): Int {
@@ -5898,7 +5895,7 @@ class GodActivity : Activity() {
         return name.length + 670
     }
     fun handler1960(name: String): Int {
-        registerReceiver(spreadReceiver, android.content.IntentFilter("com.appknox.stress.PING"))
+        ContextCompat.registerReceiver(this, spreadReceiver, android.content.IntentFilter("com.appknox.stress.PING"), ContextCompat.RECEIVER_NOT_EXPORTED)
         return name.length + 731
     }
     fun handler1961(name: String): Int {

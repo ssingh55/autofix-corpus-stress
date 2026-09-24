@@ -255,7 +255,7 @@
         <activity android:name=".Stub249Activity" android:exported="false" />
         <service android:name=".Stub250Service" android:exported="false" />
         <receiver android:name=".Stub251Receiver" android:exported="false" />
-        <activity android:name=".Stub252Activity" android:exported="true" android:permission="com.appknox.stress.permission.NORMAL" />
+        <activity android:name=".Stub252Activity" android:exported="false" android:taskAffinity="" android:launchMode="singleTask" />
         <service android:name=".Stub253Service" android:exported="false" />
         <receiver android:name=".Stub254Receiver" android:exported="false" />
         <activity android:name=".Stub255Activity" android:exported="false" />
@@ -485,7 +485,7 @@
         <receiver android:name=".Stub479Receiver" android:exported="false" />
         <activity android:name=".Stub480Activity" android:exported="false" />
         <service android:name=".Stub481Service" android:exported="false" />
-        <receiver android:name=".Stub482Receiver" android:exported="true" />
+        <receiver android:name=".Stub482Receiver" android:exported="false" />
         <activity android:name=".Stub483Activity" android:exported="false" />
         <service android:name=".Stub484Service" android:exported="false" />
         <receiver android:name=".Stub485Receiver" android:exported="false" />
