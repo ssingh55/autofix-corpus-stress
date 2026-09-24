@@ -5791,7 +5791,7 @@ fun filler1157(x: Int): Int {
 }
 
 fun s1ControlPlant() {
-    val s1Control = java.util.Random().nextInt(1_000_000)
+    val s1Control = java.security.SecureRandom().nextInt(1_000_000)
 }
 
 fun filler1158(x: Int): Int {
@@ -15825,7 +15825,6 @@ fun filler3163(x: Int): Int {
 }
 
 fun s1StressPlant() {
-    android.util.Log.d("S1", "past the read cap: session token refreshed")
 }
 
 fun filler3164(x: Int): Int {

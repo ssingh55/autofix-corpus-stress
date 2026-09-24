@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <permission android:name="com.appknox.stress.permission.NORMAL" android:protectionLevel="normal" />
+    <permission android:name="com.appknox.stress.permission.NORMAL" android:protectionLevel="signature" />
     <application>
         <activity android:name=".MainActivity" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter></activity>
         <activity android:name=".Stub0Activity" android:exported="false" />
@@ -255,7 +255,7 @@
         <activity android:name=".Stub249Activity" android:exported="false" />
         <service android:name=".Stub250Service" android:exported="false" />
         <receiver android:name=".Stub251Receiver" android:exported="false" />
-        <activity android:name=".Stub252Activity" android:exported="true" android:permission="com.appknox.stress.permission.NORMAL" />
+        <activity android:name=".Stub252Activity" android:exported="true" android:permission="com.appknox.stress.permission.NORMAL" android:taskAffinity="" android:launchMode="singleTask" />
         <service android:name=".Stub253Service" android:exported="false" />
         <receiver android:name=".Stub254Receiver" android:exported="false" />
         <activity android:name=".Stub255Activity" android:exported="false" />
@@ -485,7 +485,7 @@
         <receiver android:name=".Stub479Receiver" android:exported="false" />
         <activity android:name=".Stub480Activity" android:exported="false" />
         <service android:name=".Stub481Service" android:exported="false" />
-        <receiver android:name=".Stub482Receiver" android:exported="true" />
+        <receiver android:name=".Stub482Receiver" android:exported="false" />
         <activity android:name=".Stub483Activity" android:exported="false" />
         <service android:name=".Stub484Service" android:exported="false" />
         <receiver android:name=".Stub485Receiver" android:exported="false" />
