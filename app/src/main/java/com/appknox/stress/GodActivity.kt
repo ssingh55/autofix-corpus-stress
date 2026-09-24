@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import androidx.core.content.ContextCompat
 
 class GodActivity : Activity() {
     private val spreadReceiver = object : BroadcastReceiver() {
@@ -132,7 +133,7 @@ class GodActivity : Activity() {
     }
     fun handler40(name: String): Int {
         android.util.Log.d("S2Spread", "spread log start")
-        android.database.sqlite.SQLiteDatabase.create(null).rawQuery("SELECT * FROM t WHERE n = '" + name + "'", null)
+        android.database.sqlite.SQLiteDatabase.create(null).rawQuery("SELECT * FROM t WHERE n = ?", arrayOf(name))
         return name.length + 638
     }
     fun handler41(name: String): Int {
@@ -3015,9 +3016,24 @@ class GodActivity : Activity() {
         return name.length + 287
     }
     fun handler1000(name: String): Int {
-        val spreadRandom = java.util.Random().nextInt()
-        val spreadCipher = javax.crypto.Cipher.getInstance("AES")
-        return name.length + 603
+        val spreadRandom = java.security.SecureRandom().nextInt()
+        try {
+            val keyGen = javax.crypto.KeyGenerator.getInstance("AES")
+            keyGen.init(256)
+            val secretKey = keyGen.generateKey()
+
+            val iv = ByteArray(12)
+            java.security.SecureRandom().nextBytes(iv)
+
+            val spreadCipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+            val gcmSpec = javax.crypto.spec.GCMParameterSpec(128, iv)
+            spreadCipher.init(javax.crypto.Cipher.ENCRYPT_MODE, secretKey, gcmSpec)
+
+            return name.length + 603
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return -1
+        }
     }
     fun handler1001(name: String): Int {
         return name.length + 385
@@ -5898,7 +5914,7 @@ class GodActivity : Activity() {
         return name.length + 670
     }
     fun handler1960(name: String): Int {
-        registerReceiver(spreadReceiver, android.content.IntentFilter("com.appknox.stress.PING"))
+        ContextCompat.registerReceiver(this, spreadReceiver, android.content.IntentFilter("com.appknox.stress.PING"), ContextCompat.RECEIVER_NOT_EXPORTED)
         return name.length + 731
     }
     fun handler1961(name: String): Int {

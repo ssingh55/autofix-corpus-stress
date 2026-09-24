@@ -3593,7 +3593,7 @@
         <receiver android:name=".Stub3587Receiver" android:exported="false" />
         <activity android:name=".Stub3588Activity" android:exported="false" />
         <service android:name=".Stub3589Service" android:exported="false" />
-        <receiver android:name=".Stub3590Receiver" android:exported="true" />
+        <receiver android:name=".Stub3590Receiver" android:exported="false" />
         <activity android:name=".Stub3591Activity" android:exported="false" />
         <service android:name=".Stub3592Service" android:exported="false" />
         <receiver android:name=".Stub3593Receiver" android:exported="false" />
