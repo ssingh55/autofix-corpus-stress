@@ -2,7 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <permission android:name="com.appknox.stress.permission.NORMAL" android:protectionLevel="normal" />
     <application>
-        <activity android:name=".MainActivity" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter></activity>
+        <activity android:name=".MainActivity" android:exported="true" android:taskAffinity="" android:launchMode="singleTask"><intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter></activity>
         <activity android:name=".Stub0Activity" android:exported="false" />
         <service android:name=".Stub1Service" android:exported="false" />
         <receiver android:name=".Stub2Receiver" android:exported="false" />
