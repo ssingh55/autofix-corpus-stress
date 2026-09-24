@@ -25,3 +25,8 @@ android {
     kotlinOptions { jvmTarget = "17" }
     lint { abortOnError = false }
 }
+
+dependencies {
+    // Real apps ship androidx.core, and autofix emits ContextCompat calls (receiver fixes).
+    implementation("androidx.core:core-ktx:1.13.1")
+}
