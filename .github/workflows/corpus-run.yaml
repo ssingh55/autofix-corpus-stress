@@ -194,7 +194,7 @@ jobs:
             log="$OUT/autofix-${apk}.log"
             [ -f "$log" ] || continue
             grep -q 'were not attempted' "$log" && partial="${partial:+$partial, }${apk} run truncated at the budget (autofix-${apk}.log)"
-            skipped="${skipped:+$skipped, }${apk} $(grep -c '^autofix: skipping' "$log")"
+            skipped="${skipped:+$skipped, }${apk} $(grep -c '^autofix: skipping' "$log" || true)"
           done
           scans=()
           for apk in app s3b; do
